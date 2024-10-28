@@ -1,4 +1,11 @@
 /* USER CODE BEGIN Header */
+/*
+ * Nicolás Moklebust, 22037
+ * PROYECTO 2, DIGITAL 2
+ * El código le pide al usuario que elija una de las opciones del menú mediante transmisión UART
+ * si el usuario, elige la opción 1 le pide que indique la led y el tiempo que esta debe de estar encendida y se lo envia al ESP32 por medio de comunicación SPI
+ * Si el usuario elige la opción dos, obtiene el valor de voltaje de un potenciómetro por medio de comunicación I2C.
+ */
 /**
   ******************************************************************************
   * @file           : main.c
@@ -31,6 +38,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+//Se define esto para poder realizar la comunicación I2C con el ESP32, esta es la dirección del dispositivo (misma que ESP32)
 #define deviceAddress 0x55
 
 /* USER CODE END PD */
@@ -48,24 +56,31 @@ SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+
+//Estos son los diferentes mensajes que se le despliegan al usuario en la función de menú y en las elecciones posibles
+//Están definidos como buffers para funcionar en transmisión UART
 uint8_t bienvenida[33] = "\n\rElige la opción que desees \n\r";
 uint8_t op1[31] = "1. Controlar dispositivo SPI \n\r";
 uint8_t op2[36] = "2. Obtener medición de Sensor I2C\n\r";
-uint8_t mensaje1[70] = "Indica la led (1-3) que deseas controlar y el tiempo en ms\n\r";
+uint8_t mensaje1[70] = "Indica la led (1-3) que deseas controlar y el tiempo en ms separados por coma (t<9999)\n\r";
 uint8_t mensaje2[70] = "El valor medido es de: \n\r";
 
+//Estos buffers son utilizados para procesar la información recibida por medio de la transmisión UART.
 uint8_t rx_indx;
 uint8_t rx_buffer[10];
 uint8_t buffer[10];
 uint8_t rx_data[2];
-uint8_t transfer_cplt;
+
+//Estos buffers y variablesson utilizados para enviar y recibir los datos por medio de I2C, además facilitan el proceso de comprobar el valor que se está recibiendo.
+//La variable envio es utilizada para transmitir la info por UART al usuario.
 uint8_t dato_I2C[] = "S";
 uint8_t recibido_I2C[1];
-char envio[3];
 uint8_t entero_I2C[1];
+char envio[3];
 char num[3];
-int caso = 2;
 
+//Estas variables cambian su valor dependiendo de lo que el usuario desee realizar, estos activan o desactivan diferentes ciclos para que la transmisión y recepción de datos elegida se realice.
+int caso = 2;
 int activar = 0;
 int funcion = 0;
 /* USER CODE END PV */
@@ -77,6 +92,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
+//Mandamos a llamar la funcion "menu" que le indica al usuario las opciones de funcionamiento y comprobación que se activa cuando no se elige una opción permitida
 void menu(void);
 void comprobacion(void);
 /* USER CODE END PFP */
@@ -120,6 +136,8 @@ int main(void)
   MX_SPI1_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
+  //Establecemos la interrupción cuando se reciba datos por el monitor serial mediante la UART, esto cambia la variable data.
+  //Mandamos a llamar la función menu por primera vez para que se la indique al usuario al iniciar el programa.
   HAL_UART_Receive_IT(&huart2, &rx_data, 1);
   menu();
 
@@ -132,39 +150,60 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  //Este ciclo se activa cuando "funcion" tiene un valor de uno, provocado por seleccionar la primera opción del menú
 	  if(funcion == 1){
+		  //Se llama la funcion de comprobación que revisa el dato ingresado, regresa un valor de caso = 1 si es exitosa
 		  comprobacion();
 		  if(caso == 1){
+			//Pin SS se coloca en bajo para activar la comunicación SPI con ESP32
 			HAL_GPIO_WritePin(SS_GPIO_Port, SS_Pin, GPIO_PIN_RESET);
+			//Se envian los datos
 			HAL_SPI_Transmit(&hspi1, &buffer, 6, 15);
 			HAL_Delay(50);
+			//Se apaga el pin para cortar la comunicación
 			HAL_GPIO_WritePin(SS_GPIO_Port, SS_Pin, GPIO_PIN_SET);
+			//activar se regresa a cero para permitir que el usuario elija otra función, se despliega el menú
 			activar = 0;
 			menu();
 		  }
 		  funcion = 0;
 	  }
+	  //Cuando activar = 2, se activa el ciclo
 	  if(activar == 2){
 		  HAL_Delay(1000);
+		  //Se colocan los valores de funcion y activar en 0 para que solo recorra el ciclo una vez
 		  activar = 0;
 		  funcion = 0;
+		  //Se establece que el num sea igual al dato recibido, esto permite obtener el valor correcto de medición
 		  num[0] = recibido_I2C[0];
+		  //el cambio de dato_I2C de 0 a 1 provoca que se enviela orden correcta al ESP32 y se retorne el voltaje medido
 		  dato_I2C[0] = '0';
 		  dato_I2C[0] = '1';
+		  //Se transmiten los datos por I2C
 		  HAL_I2C_Master_Transmit(&hi2c1, (deviceAddress << 1), dato_I2C, 1, HAL_MAX_DELAY);
 		  HAL_Delay(500);
+		  //Se reciben los datos que el ESP32 regrese
 		  HAL_I2C_Master_Receive(&hi2c1, (deviceAddress << 1)|0x01, (uint8_t *)recibido_I2C, 1, HAL_MAX_DELAY);
+		  //Este ciclo comprueba que se realice la medición correcta y que no se dupliquen los resultados
 		  if((num[0] != recibido_I2C[0]) & (num[1] != recibido_I2C[0]) & (num[2] != recibido_I2C[0])){
+			  //Se establece que entero_I2C será igual al valor recibido
 			  entero_I2C[0] = recibido_I2C[0];
+			  //Se reestablece el buffer para que se envien los datos correctamente
 			  memset(envio,'\000',3);
+			  //Se pasa el valor recibido de un uint8_t a una cadena para poder indicar correctamente el valor en UART
 			  sprintf(envio, "%d", entero_I2C[0]);
 			  HAL_Delay(500);
+			  //se indica el valor en la uart para el usuario
 			  HAL_UART_Transmit(&huart2, &envio, 3, 1000);
 			  HAL_Delay(500);
+			  //se agrega este valor en num[2] para evitar que se repitan los datos.
 			  num[2] = recibido_I2C[0];
+			  //Se despliega el menú otra vez
 			  menu();
 		  }
 		  else{
+			  //en caso que los datos recibidos se repitan varias veces, se hace de nuevo todo el ciclo general por lo que activar = 2
+			  //num[1] se actualiza para evitar las repeticiones.
 			  num[1] = recibido_I2C[0];
 			  activar = 2;
 		  }
@@ -357,6 +396,8 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+
+//La funcion se activa con la interrupción que el recibimiento de datos en la UART provoca
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   /* Prevent unused argument(s) compilation warning */
@@ -364,52 +405,70 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   /* NOTE: This function should not be modified, when the callback is needed,
            the HAL_UART_RxCpltCallback could be implemented in the user file
    */
+  //Se establece la variable uint que será utilizada a lo largo del análisis de datos
   uint8_t i;
+  //si se recibe datos por la uart2 se activa esta seccion
   if(huart->Instance == USART2){
+	  //Esto reinicia la variable rx_buffer, similar a un memset
 	  if(rx_indx == 0){
 	  		  for(i = 0; i < 10; i++){
 	  			  rx_buffer[i] = 0;
 	  		  }
 	  	}
+	  //si no se recibe un enter cada tecla que se precione representará un caracter guardado en rx_buffer
 		if(rx_data[0] != 13){
 		  rx_buffer[rx_indx++] = rx_data[0];
 		}
+		//una vez se recibe el enter se activa esta seccion
 		else{
+		//Al cambiar rx_indx a 0 permite que se vacie el rx_buffer
 		  rx_indx = 0;
-		  transfer_cplt = 1;
+		  //se transmite un enter y una nueva línea
 		  HAL_UART_Transmit(&huart2, "\n\r", 2, 100);
+		  //Si el dato recibido es igual a 1 se transmite el mensaje 1 (instrucciones para seleccionar el led)
 		  if(!strcmp(rx_buffer, "1")){
 			  HAL_UART_Transmit(&huart2, &mensaje1, 70, 10);
+			  //cambia el valor de activar a 1 para que se permita la seleccion de la led
 			  activar = 1;
 		  }
+		  //si el dato recibido es igual a 2 se indica que se pedirá el valor de voltaje
 		  else if(!strcmp(rx_buffer, "2")){
 			  HAL_UART_Transmit(&huart2, &mensaje2, 70, 10);
+			  //se cambia el valor de activar a dos, esto activa el ciclo en while enviando las instrucciones por I2C
 			  activar = 2;
 		  }
+		  //Si activar es igual a 1, se cambia el valor de funcion a 1, lo que permite enviar los datos por spi
 		  else if(activar == 1){
 			  funcion = 1;
+			  //se reinicia la variable buffer
 			  memset(buffer, 0, 10);
+			  //se asigna el valor de la variable rx_buffer a la variable buffer, esta se procesará en el ciclo del while para enviar la info al esp32
 			  for(int y = 0; y < 10; y++){
 				  buffer[y] = rx_buffer[y];
 			  }
 		  }
+		  //Si el dato enviado por el usuario no coincide, se indica que ingrese otro valor y se despliega otra vez el menú
 		  else{
 			  HAL_UART_Transmit(&huart2, "Opción inválida, ingrese de nuevo", 40, 10);
 			  menu();
 		  }
 		}
+		//Se colocan los paramentros para mostrar el valor escrito al usuario y para setear la interrupción
 		HAL_UART_Receive_IT(&huart2, &rx_data, 1);
 		HAL_UART_Transmit(&huart2, &rx_data, strlen(rx_data), 100);
   }
 
 }
+//Función de menu, solo imprime en el monitor las posibles opciones que el usuario tiene
 void menu(void){
 	HAL_UART_Transmit(&huart2, &bienvenida, 50, 10);
 	HAL_UART_Transmit(&huart2, &op1, 31, 10);
 	HAL_UART_Transmit(&huart2, &op2, 36, 10);
 }
+//La funcion se encarga de combrar que el led seleccionado existta
 void comprobacion(void){
 	if((buffer[0] == '1')| (buffer[0] == '2') | (buffer[0] == '3')) {
+		//Si la led existe verifica que la persona haya seguido el formato para el tiempo
 		if(buffer[1] == ','){
 			caso = 1;
 		}
@@ -420,6 +479,7 @@ void comprobacion(void){
 	else{
 		caso = 0;
 	}
+	//Si no se cumple la condicion de las leds o la coma, se inca que la opción elegida no es válida y pide que reingrese datos.
 	if(caso == 0){
 		HAL_UART_Transmit(&huart2, "Opción inválida, ingrese de nuevo", 40, 10);
 		HAL_UART_Transmit(&huart2, "\n\r", 2, 100);
