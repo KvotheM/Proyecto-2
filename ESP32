@@ -1,99 +1,131 @@
+*
+Nicolás Moklebust, 22037
+Este código es del dispositivo utilizado como esclavo para la comunicación SPI del proyecto y de la I2C. 
+
+Recibe datos con instrucciones del núcleo y dependiendo de estas envia de regreso los datos pedidos
+o se encarga de ejecutar las instrucciones que se le indiquen (prender leds en cierto tiempo)
+*/
+
+//Se incluyen las librerías necesarias para el funcionamiento de las diferentes comunicaciones necesarias
+//SPI e I2C
 #include <Arduino.h>
 #include "Wire.h"
 #include <ESP32SPISlave.h>
 
-//definiciones para I2C
+//Se define la dirección del I2C
 #define I2C_DEV_ADDR 0x55
+//Se define el pin el potenciometro (entrada analógica)
 #define potenciometro 35
+
+//Se definen los pines de las tres leds a utilizar
 #define LED1 15
 #define LED2 2
 #define LED3 4
 
 
-//settings del SPI
+//settings del SPI, se nombra como slave
 ESP32SPISlave slave; 
 
+//se indican los buffers que se usarán para recibir la información mediante SPI
 static constexpr uint32_t BUFFER_SIZE{32};
 uint8_t spi_slave_rx_buf[BUFFER_SIZE];
 uint8_t led;
+
+//Se define la variable tiempo donde se guardará el tiempo recibido en ms
 int tiempo[4] = {0, 0, 0, 0};
 
 
+//Se establecen las variables que habilitan la lógica para leer y enviar los datos en I2C
 int envio = 0;
 uint16_t lectura;
 uint8_t sensor;
 
+
+//Se mandar a llamar las funciones para recibir y enviar datos por I2C y la función que activa las leds dependiendo de lo recibido por SPI
 void onRequest();
 void onReceive(int len);
 void leds(int tiempo[], uint8_t led);
 
 void setup()
 {
+  //Se inicia el serial
   Serial.begin(115200);
+  //Se establecen los delays para un funcionamiento adecuado
   delay(2000);
   delay(2000);
+  //Se inicializan las funciones y protocolos para enviar datos por I2C
   Serial.setDebugOutput(true);
-  pinMode(LED1, OUTPUT);
-  pinMode(LED2, OUTPUT);
-  pinMode(LED3, OUTPUT);
   Wire.onReceive(onReceive);
   Wire.onRequest(onRequest);
   Wire.begin((uint8_t)I2C_DEV_ADDR);
-
+  //Se indica el funcionamiento que los diferentes pines tendrán
+  pinMode(LED1, OUTPUT);
+  pinMode(LED2, OUTPUT);
+  pinMode(LED3, OUTPUT);
+  //Se inicializa la lógica para el funcionamiento del SP como esclavo
   slave.setDataMode(SPI_MODE0);
   slave.setQueueSize(1);
   slave.begin(VSPI);
 
-  
+  //Se reinicia el buffer para el funcionamiento adecuado
   memset(spi_slave_rx_buf, 0, BUFFER_SIZE);
 
 }
 
 void loop()
 {
+  //Se indica que el esclavo debe de esperar a recibir información
   slave.wait(spi_slave_rx_buf, NULL, BUFFER_SIZE);
-
+  //Si está disponible recibir datos se inicia esto
   while(slave.available()){
-    Serial.println("Spi data: ");
+    //Se define led como la lectura de la posicón cero del rx_buf
     led = ((uint8_t)spi_slave_rx_buf[0]-48);
+    //Se separan los dígitos de tiempo enviado en el buffer de recibida
     for(int i = 2; i < 6; i++){
       tiempo[i-2] = ((int)spi_slave_rx_buf[i]-48); 
-      Serial.println(tiempo[i-2]);
     }
+    //se llama la función leds la cual se encarga de encender el led indicado por el tiempo necesario
     leds(tiempo, led);
+    //Se "desconecta" el esclavo
     slave.pop();
     
   } 
-
-
 }
+//La función espera a que el maestro necesite el dato y se le envía el valor del potenciometro medido
 void onRequest()
 {
   delay(100);
   if(envio == 1){
     Serial.println("Preparando dato I2C");
+    //Se lee potenciometro y se mapea
     lectura = analogRead(potenciometro);
     sensor = map(lectura, 0, 4095, 0, 254);
     Serial. print("Dato enviado: ");
     Serial.println(sensor);
+    //Se envia el dato a el núcleo y envio regresa a 0 para desactivar la función de envio
     Wire.write(sensor);
     envio = 0; 
   } 
 }
+//Si el esp32 recibe datos en I2C se activa esto
 void onReceive(int len)
 {
-  Serial.printf("onReceive[%d]: \n", len);
+  //Si el serial está disponible se lee el dato de entrada
   while(Wire.available())
   {
+    //El byte se alamacena en incomingByte
     uint8_t incomingByte = Wire.read(); 
     Serial.write(incomingByte);
+    //Si el byte es igual a 1, envio es igual a uno y permite enviar el dato del potenciometro de regreso
     if(incomingByte == '1'){
       envio = 1; 
     }
   }
 }
+//La funcion toma el tiempo y el led indicado y lo enciende como se le ordene
 void leds(int tiempo[], uint8_t led){
   int tiempo_total; 
+  //Primero se convierte el array de números en un valor de tiempo en ms
   if(tiempo[3] == -48){
     tiempo_total = (tiempo[0]*100) + (tiempo[1]*10) + (tiempo[2]);
   }
@@ -101,6 +133,7 @@ void leds(int tiempo[], uint8_t led){
     tiempo_total = (tiempo[0]*1000) + (tiempo[1]*100) + (tiempo[2]*10) + tiempo[3];
   }
   Serial.println(tiempo_total);
+  //dependiendo del valor de led se enciende una de las tres opciones por el tiempo estipulado por tiempo total. 
   if(led == 1){
     digitalWrite(LED1, HIGH);
     delay(tiempo_total);
@@ -117,3 +150,4 @@ void leds(int tiempo[], uint8_t led){
     digitalWrite(LED3, LOW);
   }
 }
+
